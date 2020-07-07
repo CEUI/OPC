@@ -1,277 +1,165 @@
-#! python3
-# -*- coding: utf-8 -*-
-
-"""
-:copyright:    2017 DIgSILENT GmbH. All rights reserved.
-:author:       Marcus Walther (M.Walther@digsilent.de)
-:organization: DIgSILENT GmbH
-:date:         2016-02-05
-:short:        A module describing the functionality of OPC servers.
-:todo:         -
-"""
-
+import uuid
+from threading import Thread
+import copy
 import logging
+from datetime import datetime
+import time
+from math import sin
+import sys
 
-from multiprocessing import Process, Value, Queue
-from time import sleep
+from opcua.ua import NodeId, NodeIdType
 
-from opcua import Server, ua
-from opc_wrapper.server import OpcServer
-from opc_wrapper.config.config import ServerConfiguration
-from opcua.common.callback import CallbackType
+sys.path.insert(0, "..")
+
+try:
+    from IPython import embed
+except ImportError:
+    import code
+
+    def embed():
+        myvars = globals()
+        myvars.update(locals())
+        shell = code.InteractiveConsole(myvars)
+        shell.interact()
+
+from opcua import ua, uamethod, Server
 
 
-class FreeOpcUAServer(OpcServer):  # pylint: disable=too-many-instance-attributes
+class SubHandler(object):
     """
-    A wrapper class for an OPC-UA server based on the freeOpcUa framework.
-    The server will start in a different process using the multiprocessing
-    module.
-    """
-
-    def create_monitored_items(self, event, dispatcher):
-        print("Monitored Item")
-
-        for idx in range(len(event.response_params)):
-            if (event.response_params[idx].StatusCode.is_good()):
-                nodeId = event.request_params.ItemsToCreate[idx].ItemToMonitor.NodeId
-                print("Node {0} was created".format(nodeId))
-
-
-    def modify_monitored_items(self, event, dispatcher):
-        print('modify_monitored_items')
-
-    
-    def delete_monitored_items(self, event, dispatcher):
-        print('delete_monitored_items')
-    
-
-    @property
-    def _logger(self) -> logging.Logger:
-        """
-        Get the logger for this class.
-
-        :return:  The logger for this class.
-        """
-        logger = logging.getLogger("OPC." + self.__class__.__name__)
-        return logger
-
-    def __init__(self, configuration: ServerConfiguration) -> None:
-        """
-        Initialise the free OPC UA server.
-
-        :param configuration:  The used OPC server configuration.
-        """
-        super().__init__(configuration)
-        self._process = None
-        self._stop = Value('i', False)
-        self._started = Value('i', False)
-        self._commands = Queue()  # commands to send from main process to server process
-        self.pfGroup = None
-        self._comThread = None
-
-    def isRunning(self) -> bool:
-        """
-        Check, if the OPC server is running.
-
-        :return:  True, if the OPC server is running.
-        """
-        if self._process is None:
-            return False
-
-        return self._started.value
-
-    def start(self) -> None:
-        """
-        Start the OPC server.
-        """
-        if self.isRunning():
-            self._logger.debug("Unable to start server because it is already running.")
-            return
-
-        self._logger.debug("Starting server with configuration %s", str(self.configuration))
-        self._stop.value = False
-        self._started.value = False
-        self._process = Process(target=self._start)
-        self._process.start()
-
-    def _start(self) -> None:  # pylint: disable=too-many-statements
-        """
-        Working loop the OPC server.
-        """
-        try:
-            sleep(1)
-            server = Server()
-            server.iserver.aspace.updateTimestamps = True
-            server.subscribe_server_callback(CallbackType.ItemSubscriptionCreated, self.create_monitored_items)
-            server.subscribe_server_callback(CallbackType.ItemSubscriptionModified, self.modify_monitored_items)
-            server.subscribe_server_callback(CallbackType.ItemSubscriptionDeleted, self.delete_monitored_items)
-
-            # TCP-ports usually used: 4840 (discovery server)  -  4846 (UA server)
-            server.set_endpoint("%s://%s:%s/%s" % (self.configuration.protocol, self.configuration.serverUrl, str(self.configuration.port),
-                                                   self.configuration.serverName))
-            # Setup our own namespace, not really necessary
-            uri = "http://testserver.freeopcua.io"
-            idx = server.register_namespace(uri)
-            server.start()
-            objects = server.get_objects_node()
-            self.pfGroup = objects.add_object(idx, "PF")
-            for var in self.configuration.aliases:
-                variant = None
-                dataType = int(var.dataType)
-                if dataType == 2:
-                    variant = ua.Variant(0, ua.VariantType.Int16)
-                else:
-                    if dataType == 4:
-                        variant = ua.Variant(0, ua.VariantType.Float)
-
-                if variant is None:
-                    raise RuntimeError("Unknown data type given " + var.dataType)
-
-                pfVar = self.pfGroup.add_variable(idx, var.aliasName, variant)
-                pfVar.set_writable(True)
-
-                self._logger.debug("Adding variable " + var.aliasName + " to PF group")
-
-            self._started.value = True
-            oldValues = []
-            for node in self.pfGroup.get_children():
-                self._logger.debug("Value of %s is set to %.2f initially", node.get_browse_name(), node.get_value())
-                oldValues.append(node.get_value())
-
-            cmd = None
-            while not self._stop.value:
-                sleep(0.2)
-                try:
-                    cmd = None
-                    try:
-                        cmd = self._commands.get(False)
-                    except Exception as ex:  # pylint: disable=broad-except
-                        pass
-
-                    if cmd is not None:
-                        self._logger.debug("Found command to execute: %s.", cmd)
-                        cmd.execute(self, server)
-                        self._logger.debug("Finished execution.")
-
-                    i = 0
-                    for node in list(self.pfGroup.get_children()):
-                        newValue = node.get_value()
-                        if oldValues[i] != newValue:
-                            self._logger.debug("Node %s has changed its value from %.2f to %.2f.", node.get_browse_name().to_string(),
-                                               oldValues[i], newValue)
-
-                            oldValues[i] = node.get_value()
-                        i = i + 1
-                except Exception as ex:  # pylint: disable=broad-except
-                    self._logger.error("Failure occured %s.", str(ex))
-
-            self._logger.debug("Stopping server (forked process).")
-            server.stop()
-            self._started.value = False
-        except Exception as ex:  # pylint: disable=broad-except
-            self._logger.error(str(ex))
-
-    def changeVariableValue(self, varName: str, varValue: object) -> None:
-        """
-        Change the given variable to the given value.
-
-        :param varName:   The name of the variable to change.
-        :param varValue:  The value of the variable.
-        """
-        self._commands.put(ChangeValueCommand(varName, varValue))
-
-    def deleteVariable(self, varName: str) -> None:
-        """
-        Delete the given variable.
-
-        :param varName:   The name of the variable to delete.
-        """
-        self._commands.put(DeleteVariableCommand(varName))
-
-    def stop(self) -> None:
-        """
-        Stop the OPC server.
-        """
-        if not self.isRunning():
-            self._logger.debug("Server was already stopped")
-            return
-
-        self._stop.value = True
-        self._logger.debug("Stopping server.")
-        self._process.join(3)
-
-        if self._process.is_alive():
-            self._process.terminate()
-
-        self._process = None
-        self._comThread = None
-
-
-class DeleteVariableCommand(object):  # pylint: disable=too-few-public-methods
-    """
-    The class for a delete variable command.
+    Subscription Handler. To receive events from server for a subscription
     """
 
-    def __init__(self, varName: str) -> None:
-        """
-        Initialise the delete variable command.
+    def datachange_notification(self, node, val, data):
+        print("Python: New data change event", node, val)
 
-        :parm varName:  The variable name to delete.
-        """
-        self.varName = varName
-
-    def execute(self, server: FreeOpcUAServer, internalServer: Server) -> None:
-        """
-        Execute the delete variable command.
-
-        :param server:          The used OPC server.
-        :param internalServer:  The used internal OPC server.
-        """
-        child = server.pfGroup.get_child(self.varName)
-        # internalServer.iserver.isession.delete_subscriptions(child)
-        internalServer.delete_nodes([child])
-
-    def __str__(self) -> str:
-        """
-        Get the delete variable command as string.
-
-        :return:  The delete variable command as string.
-        """
-        return "DeleteVariableCommand::Variable=%s" % self.varName
+    def event_notification(self, event):
+        print("Python: New event", event)
 
 
-class ChangeValueCommand(object):  # pylint: disable=too-few-public-methods
-    """
-    The class for a change value command.
-    """
+# method to be exposed through server
 
-    def __init__(self, varName: str, varValue: object) -> None:
-        """
-        Initialise the change value command.
+def func(parent, variant):
+    ret = False
+    if variant.Value % 2 == 0:
+        ret = True
+    return [ua.Variant(ret, ua.VariantType.Boolean)]
 
-        :parm varName:   The variable name to change.
-        :parm varValue:  The variable value to change.
-        """
-        self.varName = varName
-        self.varValue = varValue
 
-    def execute(self, server: FreeOpcUAServer, internalServer: Server) -> None:  # @UnusedVariable pylint: disable=unused-argument
-        """
-        Execute the change value command.
+# method to be exposed through server
+# uses a decorator to automatically convert to and from variants
 
-        :param server:          The used OPC server.
-        :param internalServer:  The used internal OPC server.
-        """
-        child = server.pfGroup.get_child(self.varName)
-        if child.get_data_value().Value.VariantType == ua.VariantType.Int16:
-            child.set_value(ua.Variant(int(self.varValue), ua.VariantType.Int16))
-        else:
-            child.set_value(ua.Variant(float(self.varValue), ua.VariantType.Float))
+@uamethod
+def multiply(parent, x, y):
+    print("multiply method call with parameters: ", x, y)
+    return x * y
 
-    def __str__(self) -> str:
-        """
-        Get the change value command as string.
 
-        :return:  The change value command as string.
-        """
-        return "ChangeValueCommand::Variable=%s::value=%0.2f" % (self.varName, self.varValue)
+class VarUpdater(Thread):
+    def __init__(self, var):
+        Thread.__init__(self)
+        self._stopev = False
+        self.var = var
+
+    def stop(self):
+        self._stopev = True
+
+    def run(self):
+        while not self._stopev:
+            v = sin(time.time() / 10)
+            self.var.set_value(v)
+            time.sleep(0.1)
+
+
+if __name__ == "__main__":
+    # optional: setup logging
+    logging.basicConfig(level=logging.WARN)
+    #logger = logging.getLogger("opcua.address_space")
+    # logger.setLevel(logging.DEBUG)
+    #logger = logging.getLogger("opcua.internal_server")
+    # logger.setLevel(logging.DEBUG)
+    #logger = logging.getLogger("opcua.binary_server_asyncio")
+    # logger.setLevel(logging.DEBUG)
+    #logger = logging.getLogger("opcua.uaprocessor")
+    # logger.setLevel(logging.DEBUG)
+
+    # now setup our server
+    server = Server()
+    #server.disable_clock()
+    #server.set_endpoint("opc.tcp://localhost:4840/freeopcua/server/")
+    server.set_endpoint("opc.tcp://0.0.0.0:4840/freeopcua/server/")
+    server.set_server_name("FreeOpcUa Example Server")
+    # set all possible endpoint policies for clients to connect through
+    server.set_security_policy([
+                ua.SecurityPolicyType.NoSecurity,
+                ua.SecurityPolicyType.Basic256Sha256_SignAndEncrypt,
+                ua.SecurityPolicyType.Basic256Sha256_Sign])
+
+    # setup our own namespace
+    uri = "http://examples.freeopcua.github.io"
+    idx = server.register_namespace(uri)
+
+    # create a new node type we can instantiate in our address space
+    dev = server.nodes.base_object_type.add_object_type(idx, "MyDevice")
+    dev.add_variable(idx, "sensor1", 1.0).set_modelling_rule(True)
+    dev.add_property(idx, "device_id", "0340").set_modelling_rule(True)
+    ctrl = dev.add_object(idx, "controller")
+    ctrl.set_modelling_rule(True)
+    ctrl.add_property(idx, "state", "Idle").set_modelling_rule(True)
+
+    # populating our address space
+
+    # First a folder to organise our nodes
+    myfolder = server.nodes.objects.add_folder(idx, "myEmptyFolder")
+    # instanciate one instance of our device
+    mydevice = server.nodes.objects.add_object(idx, "Device0001", dev)
+    mydevice_var = mydevice.get_child(["{}:controller".format(idx), "{}:state".format(idx)])  # get proxy to our device state variable 
+    # create directly some objects and variables
+    myobj = server.nodes.objects.add_object(idx, "MyObject")
+    myvar = myobj.add_variable(idx, "MyVariable", 6.7)
+    mysin = myobj.add_variable(idx, "MySin", 0, ua.VariantType.Float)
+    myvar.set_writable()    # Set MyVariable to be writable by clients
+    mystringvar = myobj.add_variable(idx, "MyStringVariable", "Really nice string")
+    mystringvar.set_writable()  # Set MyVariable to be writable by clients
+    myguidvar = myobj.add_variable(NodeId(uuid.UUID('1be5ba38-d004-46bd-aa3a-b5b87940c698'), idx, NodeIdType.Guid),
+                                   'MyStringVariableWithGUID', 'NodeId type is guid')
+    mydtvar = myobj.add_variable(idx, "MyDateTimeVar", datetime.utcnow())
+    mydtvar.set_writable()    # Set MyVariable to be writable by clients
+    myarrayvar = myobj.add_variable(idx, "myarrayvar", [6.7, 7.9])
+    myarrayvar = myobj.add_variable(idx, "myStronglytTypedVariable", ua.Variant([], ua.VariantType.UInt32))
+    myprop = myobj.add_property(idx, "myproperty", "I am a property")
+    mymethod = myobj.add_method(idx, "mymethod", func, [ua.VariantType.Int64], [ua.VariantType.Boolean])
+    multiply_node = myobj.add_method(idx, "multiply", multiply, [ua.VariantType.Int64, ua.VariantType.Int64], [ua.VariantType.Int64])
+
+    # import some nodes from xml
+    server.import_xml("custom_nodes.xml")
+
+    # creating a default event object
+    # The event object automatically will have members for all events properties
+    # you probably want to create a custom event type, see other examples
+    myevgen = server.get_event_generator()
+    myevgen.event.Severity = 300
+
+    # starting!
+    server.start()
+    print("Available loggers are: ", logging.Logger.manager.loggerDict.keys())
+    vup = VarUpdater(mysin)  # just  a stupide class update a variable
+    vup.start()
+    try:
+        # enable following if you want to subscribe to nodes on server side
+        #handler = SubHandler()
+        #sub = server.create_subscription(500, handler)
+        #handle = sub.subscribe_data_change(myvar)
+        # trigger event, all subscribed clients wil receive it
+        var = myarrayvar.get_value()  # return a ref to value in db server side! not a copy!
+        var = copy.copy(var)  # WARNING: we need to copy before writting again otherwise no data change event will be generated
+        var.append(9.3)
+        myarrayvar.set_value(var)
+        mydevice_var.set_value("Running")
+        myevgen.trigger(message="This is BaseEvent")
+        server.set_attribute_value(myvar.nodeid, ua.DataValue(9.9))  # Server side write method which is a but faster than using set_value
+
+        embed()
+    finally:
+        vup.stop()
+        server.stop()

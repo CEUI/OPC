@@ -1,0 +1,82 @@
+cd Desktop\OPC\code
+
+sudo fuser -k 6653/tcp
+
+sudo ovs-vsctl add-port s1 eth0
+
+https://www.youtube.com/watch?v=j_UUnlVC2Ss
+
+sudo ip netns add control-room
+sudo ip netns add substation
+sudo ip netns list
+
+in the host
+ip link
+
+in namespace
+sudo ip netns exec cotrol-room ip link
+sudo ip netns exec substation ip link
+
+add bridge switch
+sudo ip link add vnet type bridge
+bring it on
+sudo ip link set dev vnet up
+
+Delete link
+ip -n red link veth-red
+
+
+Create connection media
+sudo ip link add veth-sub type veth peer name veth-sub-br
+sudo ip link add veth-ctl type veth peer name veth-ctl-br
+
+sudo ip link list
+
+Attach connection to namesapce
+sudo ip link set veth-sub netns substation
+sudo ip link set veth-ctl netns cotrol-room
+
+sudo ip link set veth-ctl-br master vnet
+sudo ip link set veth-sub-br master vnet
+
+sudo ip -n substation addr add 10.0.0.1 dev veth-sub
+sudo ip -n cotrol-room addr add 10.0.0.2 dev veth-ctl
+
+sudo ip netns exec substation ip address add 10.0.0.1/24 dev veth-sub
+sudo ip netns exec cotrol-room ip address add 10.0.0.2/24 dev veth-ctl
+
+sudo ip netns exec substation ip route
+sudo ip netns exec cotrol-room ip route
+
+Enter to namesapce
+sudo ip netns exec substation bash
+sudo ip netns exec cotrol-room bash
+
+type "exit" for quit from bash
+
+
+sudo ip -n substation link set veth-sub up
+sudo ip -n cotrol-room link set veth-ctl up
+
+sudo ip link set vnet up
+sudo ip link set veth-sub-br up
+sudo ip link set veth-ctl-br up
+
+
+Connect to host VM
+sudo ip addr add 10.0.0.99/24 dev vnet
+
+sudo ip addr add 10.0.0.99/24 dev s1
+sudo ip link set s1 up
+
+
+Connect to external
+h1 ip route add 192.168.0.0/16 via 10.0.0.99
+h2 ip route add 192.168.0.0/16 via 10.0.0.99
+h1 route
+h2 route
+
+On host vm
+sudo iptables -t nat -L
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/16 -j MASQUERADE
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -j MASQUERADE

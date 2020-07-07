@@ -1,0 +1,15 @@
+A,B,C,D,E,F,G,H
+Substation17Bus01,BUS_01_V_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_02_I_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_02_P_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_02_Q_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_02_V_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_02_f_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_39_I_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_39_P_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_39_Q_RES,,4,0,0,0,0
+Substation17Bus01,LINE_01_39_V_RES,,4,0,0,0,0
+Substation17Bus01,SWT_LINE_01_02,,2,0,0,0,0
+Substation17Bus01,SWT_LINE_01_02_RES,,2,0,0,0,0
+Substation17Bus01,SWT_LINE_01_39,,2,0,0,0,0
+Substation17Bus01,SWT_LINE_01_39_RES,,2,0,0,0,0
