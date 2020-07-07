@@ -93,9 +93,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 				print("Line 01-39 I Res: "+str(value7))
 				print("======================"+"\n")
 
-			intd=intd+3
+
+			
+			time.sleep(2)
 
 			#covert inetger to string
+			value2 = val2.get_value()
 			stringd = str(value2)
 
 			#convert string to bytes data
