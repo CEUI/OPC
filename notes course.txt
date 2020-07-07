@@ -1,4 +1,5 @@
 cd Desktop\OPC\code
+#NOTES NOTES
 
 sudo fuser -k 6653/tcp
 
@@ -73,6 +74,7 @@ sudo ip link set s1 up
 Connect to external
 h1 ip route add 192.168.0.0/16 via 10.0.0.99
 h2 ip route add 192.168.0.0/16 via 10.0.0.99
+h1 ip route add 8.8.8.8/16 via 10.0.0.99
 h1 route
 h2 route
 
