@@ -15,7 +15,7 @@ HOST = '127.0.0.1'
 PORT = 12345
 
 #OPC UA Connection
-url = "opc.tcp://127.0.0.1:8899/freeopcua/server/"
+url = "opc.tcp://10.0.0.99:8899/freeopcua/server/"
 client = Client(url)
 client.connect()
 
